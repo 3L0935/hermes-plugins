@@ -5,7 +5,7 @@ description: >
   with any Hermes web search backend (SearXNG, Firecrawl, Tavily, Brave).
   Auto-discovers addons (firecrawl crawl, browser scraping) at runtime.
   Returns raw structured markdown — no LLM summarization that truncates content.
-author: hermes-plugins
+author: 3L0935
 kind: standalone
 provides_tools:
   - deep_research

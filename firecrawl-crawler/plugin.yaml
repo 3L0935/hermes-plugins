@@ -1,7 +1,7 @@
 name: firecrawl-crawler
 version: 1.0.0
 description: "Exposes Firecrawl self-hosted crawl + map endpoints as web_crawl and web_map tools. Requires FIRECRAWL_API_URL (defaults to http://localhost:3002)."
-author: hermes-plugins
+author: 3L0935
 kind: standalone
 provides_tools:
   - web_crawl

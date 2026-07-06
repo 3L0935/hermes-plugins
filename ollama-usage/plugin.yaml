@@ -1,4 +1,4 @@
 name: ollama-usage
 version: "1.0.0"
 description: "/ollama slash command — shows Ollama Cloud usage (session + weekly quotas, plan tier, reset times). Zero LLM calls, instant response."
-author: hermes-plugins
+author: 3L0935
