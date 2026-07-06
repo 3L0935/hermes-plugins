@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+
+# Generic English stopwords and web-noise tokens only.
+# Domain-significant terms (python, docker, kubernetes, github, react, linux,
+# windows, chrome, etc.) are intentionally NOT stopwords here — this plugin's
+# use case is LLM/dev research where those terms carry signal.
 _STOPWORDS = frozenset(
     """
     the and for are was were been being have has had having will would could
@@ -31,11 +36,7 @@ _STOPWORDS = frozenset(
     not nor but yet however therefore thus hence more most less least very much
     many some any all both each few other such own same than then also only just
     here there where when why how what which who whom whose com org net http https
-    www html php css javascript python java ruby rust golang node react vue angular
-    svelte next nuxt webpack babel eslint typescript docker kubernetes helm istio
-    consul terraform ansible jenkins gitlab github bitbucket git azure aws gcp
-    figma sketch adobe illustrator photoshop premiere after effects indesign
-    linux windows macos android ios chrome firefox safari edge opera browser
+    www html php css
     monday tuesday wednesday thursday friday saturday sunday january february
     march april may june july august september october november december
     """.split()

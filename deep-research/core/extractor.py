@@ -40,16 +40,6 @@ def _domain(url: str) -> str:
         return ""
 
 
-def _is_multi_page_site(urls: list[str]) -> bool:
-    """Heuristic: if ≥3 URLs share a domain, a crawl is worthwhile."""
-    domain_counts: dict[str, int] = {}
-    for u in urls:
-        d = _domain(u)
-        if d:
-            domain_counts[d] = domain_counts.get(d, 0) + 1
-    return any(c >= 3 for c in domain_counts.values())
-
-
 _JS_HEURISTIC_DOMAINS = {
     "twitter.com",
     "x.com",
@@ -282,48 +272,120 @@ class Extractor:
         if not urls:
             return []
 
-        strategy = self._select_strategy(urls)
-        if strategy is None:
-            logger.warning(
-                "no extraction capability available — skipping %d URLs", len(urls)
-            )
-            return []
+        # Select a strategy per-URL, then group URLs that share a strategy so
+        # we still benefit from batching (e.g. web_extract's 5-URL batches).
+        groups = self._group_urls_by_strategy(urls)
 
-        logger.debug(
-            "extractor strategy: %s for %d urls", type(strategy).__name__, len(urls)
-        )
-        try:
-            pages = await strategy.extract(urls, tool_dispatch, max_pages)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("extraction strategy %s failed: %s", type(strategy).__name__, exc)
-            return []
+        all_pages: list[Page] = []
+        for strategy, group_urls in groups:
+            if len(all_pages) >= max_pages:
+                break
+            remaining = max_pages - len(all_pages)
+            logger.debug(
+                "extractor strategy: %s for %d urls (budget %d)",
+                type(strategy).__name__, len(group_urls), remaining,
+            )
+            try:
+                pages = await strategy.extract(group_urls, tool_dispatch, remaining)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("extraction strategy %s failed: %s", type(strategy).__name__, exc)
+                continue
+            all_pages.extend(pages)
 
         # Filter out empty-content pages (but keep error pages for accounting)
-        return pages
+        return all_pages
 
-    def _select_strategy(self, urls: list[str]) -> Optional[Any]:
-        """Pick the best extraction strategy based on available capabilities."""
+    def _group_urls_by_strategy(
+        self, urls: list[str]
+    ) -> list[tuple[Any, list[str]]]:
+        """Group URLs by their best-fit strategy, preserving discovery order.
+
+        Returns a list of ``(strategy, [urls])`` pairs suitable for batched
+        extraction.  URLs needing the same strategy are grouped together so
+        ``PageExtractStrategy`` can still issue 5-URL ``web_extract`` batches.
+        """
         caps = self.cap_registry.discover()
+        has_page_extract = "page-extract" in caps
+        has_browser = "browser-scrape" in caps
+        has_deep_crawl = "deep-crawl" in caps
 
-        # Priority 1: deep-crawl for multi-page sites
-        if "deep-crawl" in caps and _is_multi_page_site(urls):
-            return DeepCrawlStrategy(caps["deep-crawl"])
+        # Precompute domain counts to decide deep-crawl eligibility per-URL.
+        domain_counts: dict[str, int] = {}
+        for u in urls:
+            d = _domain(u)
+            if d:
+                domain_counts[d] = domain_counts.get(d, 0) + 1
+
+        # Map each URL to a strategy instance.  We reuse the same instance for
+        # all URLs that share a strategy type so state (e.g. crawled_domains)
+        # is preserved across the group.
+        strategies: dict[str, Any] = {}
+
+        def _get_strategy(name: str) -> Optional[Any]:
+            if name not in strategies:
+                if name == "deep-crawl" and has_deep_crawl:
+                    strategies[name] = DeepCrawlStrategy(caps["deep-crawl"])
+                elif name == "browser-scrape" and has_browser:
+                    strategies[name] = BrowserScrapeStrategy(caps["browser-scrape"])
+                elif name == "page-extract" and has_page_extract:
+                    strategies[name] = PageExtractStrategy(caps["page-extract"])
+                else:
+                    strategies[name] = None
+            return strategies[name]
+
+        ordered: list[tuple[Any, list[str]]] = []
+        index_by_strategy: dict[int, int] = {}  # id(strategy) -> position in ordered
+
+        for url in urls:
+            strat = self._select_strategy_for_url(
+                url,
+                domain_counts.get(_domain(url), 0),
+                has_page_extract,
+                has_browser,
+                has_deep_crawl,
+                _get_strategy,
+            )
+            if strat is None:
+                logger.warning("no extraction capability for %s — skipping", url)
+                continue
+            key = id(strat)
+            if key in index_by_strategy:
+                ordered[index_by_strategy[key]][1].append(url)
+            else:
+                index_by_strategy[key] = len(ordered)
+                ordered.append((strat, [url]))
+
+        return ordered
+
+    def _select_strategy_for_url(
+        self,
+        url: str,
+        domain_count: int,
+        has_page_extract: bool,
+        has_browser: bool,
+        has_deep_crawl: bool,
+        get_strategy: Callable[[str], Optional[Any]],
+    ) -> Optional[Any]:
+        """Pick the best extraction strategy for a single URL."""
+        # Priority 1: deep-crawl when this URL's domain has ≥3 URLs in the batch
+        if has_deep_crawl and domain_count >= 3:
+            return get_strategy("deep-crawl")
 
         # Priority 2: browser-scrape for JS-heavy domains
-        if "browser-scrape" in caps and _needs_js(urls):
-            return BrowserScrapeStrategy(caps["browser-scrape"])
+        if has_browser and _needs_js([url]):
+            return get_strategy("browser-scrape")
 
         # Priority 3: page-extract (workhorse)
-        if "page-extract" in caps:
-            return PageExtractStrategy(caps["page-extract"])
+        if has_page_extract:
+            return get_strategy("page-extract")
 
         # Priority 4: browser-scrape even if not JS-heavy (better than nothing)
-        if "browser-scrape" in caps:
-            return BrowserScrapeStrategy(caps["browser-scrape"])
+        if has_browser:
+            return get_strategy("browser-scrape")
 
         # Priority 5: deep-crawl even for single pages (last resort)
-        if "deep-crawl" in caps:
-            return DeepCrawlStrategy(caps["deep-crawl"])
+        if has_deep_crawl:
+            return get_strategy("deep-crawl")
 
         return None
 

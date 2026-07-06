@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 class Budget:
     # Pages
     max_pages: int = 30
-    max_pages_per_extraction: int = 10
 
     # Search
     max_results_per_query: int = 10
@@ -21,7 +20,7 @@ class Budget:
     min_iterations: int = 2
 
     # Time
-    timeout_seconds: int = 300
+    timeout_seconds: int = 600  # must match DEEP_RESEARCH_SCHEMA default
     per_page_timeout: int = 30
 
     # Crawl depth

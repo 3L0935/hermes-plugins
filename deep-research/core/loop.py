@@ -22,7 +22,7 @@ from .extractor import Extractor
 from .planner import Planner, _get_auxiliary_client
 from .searcher import Searcher
 from .synthesizer import assemble
-from .types import Page, ResearchGoal, ResearchResult, SearchQuery, SearchResult
+from .types import Page, ResearchGoal, ResearchResult, SearchResult
 from ..capabilities.registry import CapabilityRegistry
 
 logger = logging.getLogger("hermes.deep-research.loop")

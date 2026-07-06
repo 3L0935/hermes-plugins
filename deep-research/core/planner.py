@@ -222,16 +222,19 @@ No numbering, no explanation.
         parts = [p.strip() for p in parts if len(p.strip()) > 10]
 
         queries = []
+        key_terms: list[str] = []  # defined here so padding below never hits UnboundLocalError
+
+        # Extract model names (e.g. Qwen3.6-35B-A3B) and key noun phrases from
+        # the whole query up front — both branches use them.
+        model_names = re.findall(r'[A-Z][a-zA-Z0-9]+(?:[-.][a-zA-Z0-9]+)+', q)
+        words = re.findall(r'[A-Za-z][a-z]{3,}(?:[A-Z][a-z]+)*', q)
+        key_terms = model_names + [w for w in words if w.lower() not in _STOPWORDS_FALLBACK]
 
         # If the query has clear sub-parts, use them
         if len(parts) >= 2:
             queries = parts[:max_queries]
         else:
-            # Extract key noun phrases (words 4+ chars, not stopwords)
-            words = re.findall(r'[A-Za-z][a-z]{3,}(?:[A-Z][a-z]+)*', q)
-            # Also catch model names like Qwen3.6-35B-A3B
-            model_names = re.findall(r'[A-Z][a-zA-Z0-9]+(?:[-.][a-zA-Z0-9]+)+', q)
-            key_terms = model_names + [w for w in words if w.lower() not in _STOPWORDS_FALLBACK]
+            # key_terms already extracted above
 
             if len(key_terms) >= 3:
                 # Group into sub-queries
@@ -244,10 +247,12 @@ No numbering, no explanation.
 
         # Add generic variants
         if len(queries) < max_queries:
-            queries.append(f"{key_terms[0] if key_terms else q} local inference 24GB VRAM" if key_terms else f"{q} local inference")
+            lead = key_terms[0] if key_terms else q
+            queries.append(f"{lead} local inference 24GB VRAM")
 
         if len(queries) < max_queries:
-            queries.append(f"{key_terms[0] if key_terms else q} coding agentic benchmark" if key_terms else f"{q} benchmark")
+            lead = key_terms[0] if key_terms else q
+            queries.append(f"{lead} coding agentic benchmark")
 
         # Deduplicate while preserving order
         seen: set[str] = set()
