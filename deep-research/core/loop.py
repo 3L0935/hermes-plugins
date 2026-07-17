@@ -1,13 +1,16 @@
-"""Research loop — orchestrates the 5 phases: plan → search → extract → converge → synthesize.
+"""Research loop — orchestrates the research phases.
+
+Base phases (light & full): plan → search → extract → converge → synthesize
+Full mode adds: adversary critics → gap-fetch → gap appendix → vault indexing
 
 This is the heart of the deep-research plugin.  It ties together the
-planner, searcher, extractor, convergence detector, and synthesizer into
-a single iterative loop controlled by a :class:`Budget`.
+planner, searcher, extractor, convergence detector, synthesizer, and
+(optionally) critics into a single iterative loop controlled by a Budget.
 
 The loop is fully async — every tool dispatch (web_search, web_extract,
-web_crawl) and every LLM call (planner) is awaited.  The ``tool_dispatch``
-callable is provided by the plugin handler (which receives it from Hermes'
-plugin context).
+web_crawl) and every LLM call (planner, critics) is awaited.  The
+``tool_dispatch`` callable is provided by the plugin handler (which receives
+it from Hermes' plugin context).
 """
 
 from __future__ import annotations
@@ -18,11 +21,13 @@ from typing import Any, Callable, Optional
 
 from .budget import Budget, BudgetGuard
 from .convergence import compute_novelty, should_converge
+from .critics import format_gap_report, run_critics
 from .extractor import Extractor
 from .planner import Planner, _get_auxiliary_client
 from .searcher import Searcher
 from .synthesizer import assemble
-from .types import Page, ResearchGoal, ResearchResult, SearchResult
+from .types import Page, ResearchGoal, ResearchMode, ResearchResult, SearchResult
+from .vault import ResearchVault
 from ..capabilities.registry import CapabilityRegistry
 
 logger = logging.getLogger("hermes.deep-research.loop")
@@ -211,7 +216,7 @@ class ResearchLoop:
 
             iteration += 1
 
-        # Phase 5: SYNTHESIZE
+        # Phase 5: SYNTHESIZE (base — both modes)
         elapsed = time.monotonic() - start_time
         logger.info(
             "synthesizing: %d pages, %d iterations, %.1fs elapsed, converged=%s",
@@ -228,6 +233,83 @@ class ResearchLoop:
             queries_used=self.queries_used,
             capabilities_used=sorted(self.capabilities_used),
         )
+
+        # Phase 6: FULL MODE — critics + gap-fill + vault
+        gaps: list[dict] = []
+        gap_sources: list[dict] = []
+        vault_markdown = synth["markdown"]
+
+        if goal.mode == ResearchMode.FULL:
+            logger.info("full mode: running adversarial critics")
+            llm_client, llm_model = _get_auxiliary_client()
+
+            # 6a. Run critics
+            gaps = await run_critics(
+                goal.query,
+                synth["markdown"],
+                llm_client,
+                llm_model,
+                max_gaps=5,
+            )
+
+            if gaps:
+                logger.info("full mode: %d gaps identified, fetching sources", len(gaps))
+
+                # 6b. Targeted gap-fill search
+                gap_queries = [g["search_query"] for g in gaps if g.get("search_query")]
+                if gap_queries and self.guard.time_remaining() > 30:
+                    gap_results = await self.searcher.search(
+                        gap_queries,
+                        goal=goal,
+                        max_per_query=5,
+                    )
+                    # Extract top gap-fill sources
+                    gap_urls = [r.url for r in gap_results[:10] if r.url not in {p.url for p in self.corpus}]
+                    if gap_urls:
+                        gap_pages = await self.extractor.extract_batch(
+                            gap_urls,
+                            self.dispatch,
+                            max_pages=10,
+                        )
+                        gap_sources = [
+                            {
+                                "url": p.url,
+                                "title": p.title,
+                                "snippet": p.content[:300] if p.content else "",
+                                "domain": p.domain,
+                            }
+                            for p in gap_pages
+                            if p.content and not p.extraction_error
+                        ]
+
+            # 6c. Append gap report to markdown
+            gap_appendix = format_gap_report(gaps, gap_sources)
+            vault_markdown = synth["markdown"] + gap_appendix
+
+            # 6d. Index in vault (persistent research knowledge base)
+            try:
+                vault = ResearchVault()
+                vault.index_research(
+                    query=goal.query,
+                    markdown=vault_markdown,
+                    sources=self.corpus,
+                    gaps=gaps,
+                )
+                logger.info("full mode: research indexed in vault")
+            except Exception as exc:
+                logger.warning("vault indexing failed: %s", exc)
+
+        # Re-check truncation with vault markdown
+        final_markdown = vault_markdown
+        final_truncated = False
+        final_full_path: str | None = synth.get("full_content_path")
+
+        if len(final_markdown) > 200_000:
+            from .synthesizer import _write_to_disk, _truncate_markdown
+            file_path = _write_to_disk(final_markdown, goal)
+            final_markdown = _truncate_markdown(final_markdown, 200_000)
+            final_truncated = True
+            final_full_path = str(file_path)
 
         # Build sources metadata
         sources_meta = [
@@ -252,10 +334,13 @@ class ResearchLoop:
             converged=converged,
             novelty_final=round(novelty_final, 4),
             sources=sources_meta,
-            markdown=synth["markdown"],
-            full_content_path=synth["full_content_path"],
-            truncated=synth["truncated"],
-            total_chars=synth["total_chars"],
+            markdown=final_markdown,
+            full_content_path=final_full_path,
+            truncated=final_truncated,
+            total_chars=len(vault_markdown),
+            mode=goal.mode.value if isinstance(goal.mode, ResearchMode) else str(goal.mode),
+            gaps=gaps,
+            gap_sources=gap_sources,
         )
 
     # ------------------------------------------------------------------

@@ -26,7 +26,8 @@ DEEP_RESEARCH_SCHEMA = {
         "addons (firecrawl crawl, browser scraping) at runtime. "
         "Returns RAW markdown — no LLM summarization that truncates content. "
         "Use this when you need thorough, multi-source research with full "
-        "content extraction, not just search snippets."
+        "content extraction, not just search snippets. "
+        "Use mode='full' for adversarial critics + gap-fill + persistent vault."
     ),
     "parameters": {
         "type": "object",
@@ -34,6 +35,16 @@ DEEP_RESEARCH_SCHEMA = {
             "query": {
                 "type": "string",
                 "description": "The research question or topic to investigate deeply.",
+            },
+            "mode": {
+                "type": "string",
+                "description": (
+                    "'light' (default, faster) — base loop: plan, search, extract, converge, synthesize. "
+                    "'full' — base + adversarial critics + gap-fill search + persistent vault indexing. "
+                    "Use 'full' for important research where depth matters over speed."
+                ),
+                "enum": ["light", "full"],
+                "default": "light",
             },
             "max_pages": {
                 "type": "integer",
@@ -136,6 +147,7 @@ async def _handle_deep_research(args: dict, **kw) -> str:
         focus_domains=args.get("focus_domains", []),
         exclude_domains=args.get("exclude_domains", []),
         max_depth=args.get("max_depth", 1),
+        mode=args.get("mode", "light"),
     )
 
     # Build the dispatch function using the stored plugin context
@@ -173,6 +185,7 @@ async def _handle_deep_research(args: dict, **kw) -> str:
     result_dict = {
         "success": result.success,
         "query": result.query,
+        "mode": result.mode,
         "iterations": result.iterations,
         "pages_extracted": result.pages_extracted,
         "converged": result.converged,
@@ -183,6 +196,8 @@ async def _handle_deep_research(args: dict, **kw) -> str:
         "truncated": result.truncated,
         "total_chars": result.total_chars,
         "error": result.error,
+        "gaps": result.gaps,
+        "gap_sources": result.gap_sources,
     }
 
     return json.dumps(result_dict, indent=2, ensure_ascii=False)

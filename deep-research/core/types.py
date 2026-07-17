@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
+
+
+class ResearchMode(str, Enum):
+    """Research depth mode — controls critic and gap-fill pipeline."""
+    LIGHT = "light"   # Base loop (plan → search → extract → converge → synthesize)
+    FULL = "full"     # Base + adversarial critics + gap-fill + vault indexing
 
 
 @dataclass
@@ -12,6 +19,7 @@ class ResearchGoal:
     focus_domains: list[str] = field(default_factory=list)
     exclude_domains: list[str] = field(default_factory=list)
     max_depth: int = 1  # crawl depth for web_crawl discovery (1=homepage+links)
+    mode: ResearchMode = ResearchMode.LIGHT
 
 
 @dataclass
@@ -59,3 +67,6 @@ class ResearchResult:
     truncated: bool = False
     total_chars: int = 0
     error: Optional[str] = None
+    mode: str = "light"
+    gaps: list[dict] = field(default_factory=list)
+    gap_sources: list[dict] = field(default_factory=list)
