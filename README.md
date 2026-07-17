@@ -4,10 +4,14 @@ A few plugins we built for [Hermes Agent](https://hermes-agent.nousresearch.com/
 
 ## Plugins
 
-### `deep-research` ⚠️ WIP
+### `deep-research`
 Iterative multi-source research tool. Search-agnostic — works with SearXNG, Firecrawl, Tavily, Brave. Auto-discovers addons at runtime. Returns raw markdown, no LLM summarization truncation.
 
-Still rough around the edges. Contributions welcome.
+**Two modes:**
+- `mode="light"` (default) — base loop: plan → search → extract → converge → synthesize
+- `mode="full"` — base loop + adversarial critics + gap-fill search + persistent vault indexing
+
+Full mode runs 3 critic profiles (counter-argument, depth, width) against the assembled report via the auxiliary LLM, identifies gaps with targeted search queries, fetches gap-filling sources, and appends a Gap Analysis section. Every full-mode run is indexed in the vault at `~/.hermes/deep-research/vault/` for cross-session reuse.
 
 ### `firecrawl-crawler`
 Extends Hermes' web capabilities with two tools backed by Firecrawl self-hosted:
