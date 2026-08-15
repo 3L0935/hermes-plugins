@@ -21,12 +21,15 @@ Extends Hermes' web capabilities with two tools backed by Firecrawl self-hosted:
 Requires a Firecrawl instance. Set `FIRECRAWL_API_URL` (defaults to `http://localhost:3002`).
 
 ### `ollama-usage`
-`/ollama` slash command that shows your Ollama Cloud usage — session and weekly quotas, plan tier, reset times. Zero LLM calls, instant response.
+`/ollama` slash command that shows your Ollama Cloud usage — session and weekly quotas, per-model request counts, reset times. Zero LLM calls, instant response.
 
-Requires a session cookie from ollama.com/settings:
+Uses the official API endpoint `https://ollama.com/api/usage` (no scraping). Requires your Ollama API key:
 ```bash
-echo '__Secure-session=<value>' > ~/.hermes/ollama_cookie.txt
+# Either export it, or add to ~/.hermes/.env
+export OLLAMA_API_KEY=your_key_here
 ```
+
+Reset times are fixed-clock anchors (the API does not expose them): session resets every 5h on the hour anchored at 17:00 local, weekly resets Monday 02:00 local.
 
 ## Install
 
