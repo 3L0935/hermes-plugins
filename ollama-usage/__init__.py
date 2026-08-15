@@ -20,10 +20,11 @@ Response shape (as of Aug 2026):
     }
   }
 
-NOTE: the API does NOT expose reset timestamps. Session is a fixed 5h window,
-weekly a 7-day window. We approximate reset as a rolling window from fetch time
-(reset_at = fetched_at + 5h / +7d). If Ollama ever exposes the real reset time,
-prefer it over this approximation.
+NOTE: the API does NOT expose reset timestamps. The windows are fixed-clock:
+  - Session: 5h cycle anchored at 17:00 local (resets 17h, 22h, 3h, 8h, 13h)
+  - Weekly:  Monday 02:00 local
+We compute the next reset from these fixed anchors. If Ollama ever exposes
+the real reset time, prefer it over this approximation.
 """
 
 from __future__ import annotations
@@ -42,8 +43,9 @@ ENV_FILE = Path.home() / ".hermes" / ".env"
 USAGE_URL = "https://ollama.com/api/usage"
 TIMEOUT = 15
 
-SESSION_WINDOW = timedelta(hours=5)
-WEEKLY_WINDOW = timedelta(days=7)
+# Fixed-clock reset anchors (local time)
+SESSION_ANCHOR_HOUR = 17  # session resets every 5h, anchored at 17:00
+WEEKLY_RESET_HOUR = 2     # weekly resets Monday 02:00
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -102,9 +104,39 @@ def _fetch_usage_json() -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _next_session_reset(now: datetime) -> datetime:
+    """Next session reset: every 5h on the hour, anchored at 17:00.
+
+    Reset times are 17:00, 22:00, 03:00, 08:00, 13:00, 18:00, ... (5h steps).
+    Because 5 and 24 are coprime, the hour drifts each day — so walk forward
+    in 5h steps from a known anchor rather than assuming a fixed set of hours.
+    """
+    anchor = now.replace(hour=SESSION_ANCHOR_HOUR, minute=0, second=0, microsecond=0)
+    candidate = anchor
+    while candidate > now:
+        candidate -= timedelta(hours=5)
+    while candidate <= now:
+        candidate += timedelta(hours=5)
+    return candidate
+
+
+def _next_weekly_reset(now: datetime) -> datetime:
+    """Next weekly reset: Monday 02:00 local."""
+    # weekday(): Monday=0 ... Sunday=6
+    days_until_monday = (0 - now.weekday()) % 7
+    candidate = (now + timedelta(days=days_until_monday)).replace(
+        hour=WEEKLY_RESET_HOUR, minute=0, second=0, microsecond=0
+    )
+    if candidate <= now:
+        candidate += timedelta(days=7)
+    return candidate
+
+
 def _parse_usage(data: dict) -> dict:
     """Extract usage fields from the API JSON."""
-    now = _utc_now()
+    # Reset anchors are in LOCAL time (17h session, Monday 02h weekly), so
+    # compute from the local clock, not UTC.
+    now = datetime.now().astimezone()
     limits = data.get("limits", {})
 
     session = limits.get("session", {})
@@ -112,10 +144,10 @@ def _parse_usage(data: dict) -> dict:
 
     return {
         "session_used_pct": session.get("usage"),
-        "session_reset": now + SESSION_WINDOW,
+        "session_reset": _next_session_reset(now),
         "session_models": session.get("models", []),
         "weekly_used_pct": weekly.get("usage"),
-        "weekly_reset": now + WEEKLY_WINDOW,
+        "weekly_reset": _next_weekly_reset(now),
         "weekly_models": weekly.get("models", []),
     }
 
