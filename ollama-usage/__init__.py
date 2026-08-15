@@ -7,23 +7,43 @@ Provides:
 Uses register_command() — handled at the command-dispatch level,
 BEFORE any agent/LLM call. Zero LLM calls, instant response.
 
-Cookie: ~/.hermes/ollama_cookie.txt (__Secure-session=<value> from ollama.com/settings)
+Data source: official API endpoint https://ollama.com/api/usage
+  Auth: Authorization: Bearer <OLLAMA_API_KEY> (or raw key in header)
+  Key:  OLLAMA_API_KEY env var, or ~/.hermes/.env
+
+Response shape (as of Aug 2026):
+  {
+    "activity": { "cost": "0.00000", "period": {...} },
+    "limits": {
+      "session": { "usage": 0.066, "models": [...] },   # fraction, 0.066 = 6.6%
+      "weekly":  { "usage": 0.404, "models": [...] }
+    }
+  }
+
+NOTE: the API does NOT expose reset timestamps. Session is a fixed 5h window,
+weekly a 7-day window. We approximate reset as a rolling window from fetch time
+(reset_at = fetched_at + 5h / +7d). If Ollama ever exposes the real reset time,
+prefer it over this approximation.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import re
+import os
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 PLUGIN_DIR = Path(__file__).parent
-COOKIE_FILE = Path.home() / ".hermes" / "ollama_cookie.txt"
-SETTINGS_URL = "https://ollama.com/settings"
+ENV_FILE = Path.home() / ".hermes" / ".env"
+USAGE_URL = "https://ollama.com/api/usage"
 TIMEOUT = 15
+
+SESSION_WINDOW = timedelta(hours=5)
+WEEKLY_WINDOW = timedelta(days=7)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -32,128 +52,114 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _format_reset(iso_str: str) -> str:
-    """Format an ISO timestamp as a human-readable 'in Xh Ym' string."""
-    try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        delta = dt - _utc_now()
-        total_s = int(delta.total_seconds())
-        if total_s <= 0:
-            return f"now ({dt.astimezone().strftime('%H:%M %Z')})"
-        hours, rem = divmod(total_s, 3600)
-        minutes = rem // 60
-        if hours >= 24:
-            days, hours = divmod(hours, 24)
-            rel = f"in {days}d {hours}h"
-        elif hours > 0:
-            rel = f"in {hours}h {minutes}m"
-        else:
-            rel = f"in {minutes}m"
-        return f"{rel} ({dt.astimezone().strftime('%H:%M %Z')})"
-    except (ValueError, TypeError):
-        return iso_str
+def _load_api_key() -> str:
+    """Resolve the Ollama API key: env var first, then ~/.hermes/.env."""
+    key = os.environ.get("OLLAMA_API_KEY", "").strip()
+    if key:
+        return key
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("OLLAMA_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    raise FileNotFoundError(
+        "OLLAMA_API_KEY not found. Set it in the environment or ~/.hermes/.env"
+    )
 
 
-# ── scraping ─────────────────────────────────────────────────────────────
+def _format_reset(dt: datetime) -> str:
+    """Format a reset datetime as a human-readable 'in Xh Ym' string."""
+    delta = dt - _utc_now()
+    total_s = int(delta.total_seconds())
+    if total_s <= 0:
+        return f"now ({dt.astimezone().strftime('%H:%M %Z')})"
+    hours, rem = divmod(total_s, 3600)
+    minutes = rem // 60
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        rel = f"in {days}d {hours}h"
+    elif hours > 0:
+        rel = f"in {hours}h {minutes}m"
+    else:
+        rel = f"in {minutes}m"
+    return f"{rel} ({dt.astimezone().strftime('%H:%M %Z')})"
 
-def _load_cookie() -> str:
-    """Read the session cookie from the cookie file."""
-    if not COOKIE_FILE.exists():
-        raise FileNotFoundError(
-            f"Cookie file not found at {COOKIE_FILE}\n"
-            f"Run: echo '__Secure-session=<value>' > {COOKIE_FILE}"
-        )
-    cookie = COOKIE_FILE.read_text().strip()
-    if not cookie:
-        raise ValueError("Cookie file is empty")
-    return cookie
 
+# ── API fetch ────────────────────────────────────────────────────────────
 
-def _fetch_settings_page(cookie: str) -> str:
-    """Fetch the Ollama settings page with the session cookie."""
+def _fetch_usage_json() -> dict:
+    """Call the Ollama usage API and return the parsed JSON."""
+    key = _load_api_key()
     req = urllib.request.Request(
-        SETTINGS_URL,
+        USAGE_URL,
         headers={
-            "Cookie": cookie,
+            "Authorization": key,
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0",
-            "Accept": "text/html,application/xhtml+xml",
+            "Accept": "application/json",
         },
     )
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        return json.loads(resp.read().decode("utf-8"))
 
 
-def _parse_usage(html: str) -> dict:
-    """Parse the settings page HTML for usage data."""
-    result = {
-        "plan": None,
-        "session_used_pct": None,
-        "session_reset": None,
-        "weekly_used_pct": None,
-        "weekly_reset": None,
+def _parse_usage(data: dict) -> dict:
+    """Extract usage fields from the API JSON."""
+    now = _utc_now()
+    limits = data.get("limits", {})
+
+    session = limits.get("session", {})
+    weekly = limits.get("weekly", {})
+
+    return {
+        "session_used_pct": session.get("usage"),
+        "session_reset": now + SESSION_WINDOW,
+        "session_models": session.get("models", []),
+        "weekly_used_pct": weekly.get("usage"),
+        "weekly_reset": now + WEEKLY_WINDOW,
+        "weekly_models": weekly.get("models", []),
     }
 
-    # Plan tier
-    plan_match = re.search(
-        r'Cloud usage</span>\s*\n?\s*<span[^>]*>\s*(pro|free|max)\s*<',
-        html, re.IGNORECASE
-    )
-    if plan_match:
-        result["plan"] = plan_match.group(1).capitalize()
-    else:
-        fallback = re.search(r'(Pro|Free|Max)[^<]*Cloud usage', html, re.IGNORECASE)
-        if fallback:
-            result["plan"] = fallback.group(1).capitalize()
-        else:
-            plans = re.findall(r'\b(Pro|Free|Max)\b', html)
-            if plans:
-                result["plan"] = max(set(plans), key=plans.count)
 
-    # Session usage %
-    session_pct = re.search(r'Session usage\s+([0-9.]+)%', html)
-    if session_pct:
-        result["session_used_pct"] = float(session_pct.group(1))
-
-    # Weekly usage %
-    weekly_pct = re.search(r'Weekly usage\s+([0-9.]+)%', html)
-    if weekly_pct:
-        result["weekly_used_pct"] = float(weekly_pct.group(1))
-
-    # Reset timestamps — data-time attributes, first two are session then weekly
-    resets = re.findall(r'data-time="([^"]*)"', html)
-    if len(resets) >= 1:
-        result["session_reset"] = resets[0]
-    if len(resets) >= 2:
-        result["weekly_reset"] = resets[1]
-
-    return result
+def _format_models(models: list) -> list:
+    """Format per-model request counts as one line per model."""
+    if not models:
+        return []
+    lines = []
+    for m in models:
+        name = m.get("name", "?")
+        count = m.get("request_count", 0)
+        lines.append(f"    • {name} ×{count}")
+    return lines
 
 
 def _format_usage(data: dict) -> str:
     """Format the usage data for display."""
     lines = []
-    plan = data.get("plan") or "Unknown"
-    lines.append(f"📊 Ollama Cloud — {plan}")
+    lines.append("📊 Ollama Cloud")
 
     session_pct = data.get("session_used_pct")
     if session_pct is not None:
-        remaining = max(0, 100 - session_pct)
+        pct = float(session_pct) * 100
+        remaining = max(0, 100 - pct)
         reset = data.get("session_reset")
-        line = f"  Session: {remaining:.0f}% remaining ({session_pct:.1f}% used)"
+        line = f"  Session: {remaining:.0f}% remaining ({pct:.1f}% used)"
         if reset:
             line += f" • resets {_format_reset(reset)}"
         lines.append(line)
+        lines.extend(_format_models(data.get("session_models", [])))
     else:
         lines.append("  Session: unavailable")
 
     weekly_pct = data.get("weekly_used_pct")
     if weekly_pct is not None:
-        remaining = max(0, 100 - weekly_pct)
+        pct = float(weekly_pct) * 100
+        remaining = max(0, 100 - pct)
         reset = data.get("weekly_reset")
-        line = f"  Weekly:  {remaining:.0f}% remaining ({weekly_pct:.1f}% used)"
+        line = f"  Weekly:  {remaining:.0f}% remaining ({pct:.1f}% used)"
         if reset:
             line += f" • resets {_format_reset(reset)}"
         lines.append(line)
+        lines.extend(_format_models(data.get("weekly_models", [])))
     else:
         lines.append("  Weekly:  unavailable")
 
@@ -163,15 +169,13 @@ def _format_usage(data: dict) -> str:
 def _fetch_usage_text() -> str:
     """Fetch Ollama Cloud usage — returns formatted text or error message."""
     try:
-        cookie = _load_cookie()
-        html = _fetch_settings_page(cookie)
-        data = _parse_usage(html)
+        data = _parse_usage(_fetch_usage_json())
         return _format_usage(data)
     except FileNotFoundError as e:
-        return f"Ollama Cloud usage: cookie not configured.\n{e}"
+        return f"Ollama Cloud usage: API key not configured.\n{e}"
     except Exception as e:
         logger.warning("Ollama usage fetch failed: %s", e)
-        return "Ollama Cloud usage: unavailable (cookie expired or settings page changed)"
+        return "Ollama Cloud usage: unavailable (API key invalid or endpoint changed)"
 
 
 # ── plugin command ───────────────────────────────────────────────────────
