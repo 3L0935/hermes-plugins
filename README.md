@@ -29,7 +29,7 @@ Uses the official API endpoint `https://ollama.com/api/usage` (no scraping). Req
 export OLLAMA_API_KEY=your_key_here
 ```
 
-Reset times are fixed-clock anchors (the API does not expose them): session resets every 5h on the hour anchored at 17:00 local, weekly resets Monday 02:00 local.
+Reset times are fixed-clock (the API does not expose them): the session quota resets every 5 hours on the hour (a rolling cycle, e.g. 17:00 → 22:00 → 03:00 → 08:00 → 13:00 → 18:00 → ...), and the weekly quota resets Monday 02:00 local.
 
 ## Install
 
