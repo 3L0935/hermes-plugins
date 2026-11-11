@@ -21,9 +21,9 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # executed as a script by systemd
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from gwrestart import arm, config, health, notices, probe  # noqa: E402
+    from gwrestart import arm, config, health, notices, poke, probe  # noqa: E402
 else:
-    from . import arm, config, health, notices, probe  # noqa: F401,E402
+    from . import arm, config, health, notices, poke, probe  # noqa: F401,E402
 
 
 def _iso(epoch: float | None = None) -> str:
@@ -207,10 +207,20 @@ def main(argv: list[str]) -> int:
         report["wake"] = health.wake(cfg, (spec.get("before") or {}), restart_id=restart_id, log=log)
         mark("wake_done")
 
+        report_path = spec_path.parent / "report.json"
+        report["report_path"] = str(report_path)
         report["next_steps"] = _next_steps(report)
         report["finished_at"] = _iso()
         report["duration_s"] = round(time.time() - started, 1)
         report["ok"] = bool(health_res.get("ok"))
+
+        # --------------------------------------------------------------------------- poke
+        # A real follow-up turn, not a notice that waits for the next human message.
+        if report["ok"]:
+            report["poke"] = poke.schedule_poke(report, cfg, log=log)
+            mark("poke_scheduled", **{k: v for k, v in report["poke"].items() if k != "output"})
+        else:
+            report["poke"] = {"created": False, "why": "gateway pas saine: pas de poke autonome"}
     except Exception as exc:  # noqa: BLE001 - a broken runner must still leave a report
         report["ok"] = False
         report["error"] = f"{exc.__class__.__name__}: {exc}"
@@ -238,8 +248,16 @@ def main(argv: list[str]) -> int:
         log("notice enqueuee")
     except Exception as exc:  # noqa: BLE001
         log(f"notice non enqueuee: {exc}")
-    if spec.get("notify"):
+    # Immediate channel receipt, only when the poke is not already landing in that same chat
+    # (avoids two messages for one restart).
+    origin = spec.get("origin") or {}
+    poke_info = report.get("poke") or {}
+    channel = poke.channel_target(origin, cfg)
+    covered_by_poke = bool(poke_info.get("created")) and channel and poke_info.get("deliver") == channel
+    if spec.get("notify") and not covered_by_poke:
         report["channel"] = _send_channel(spec, notices.render_report(report, for_channel=True), log)
+    elif covered_by_poke:
+        report["channel"] = {"sent": False, "why": "deja couvert par le poke dans ce chat"}
     try:
         notices.prune(cfg)
         arm.prune_reports(cfg)

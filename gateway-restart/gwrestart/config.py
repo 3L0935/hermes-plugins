@@ -49,8 +49,15 @@ DEFAULTS: dict[str, Any] = {
     "keep_notices_days": 7,
     # units that share the session with the gateway; restarted only if they died
     "companion_units": ["hermes-hub", "hermes-dashboard"],
-    # deliver the post-restart report into the messaging channel it was armed from
+    # notify_messaging_platforms: post the summary into the messaging channel the restart came from
     "notify_messaging_platforms": True,
+    # poke: run a follow-up agent turn on its own, without waiting for the human to type
+    "poke": {
+        "enabled": True,
+        "deliver": "bot-chat",   # cron target: bot-chat | bot-chat:<profile> | platform:chat
+        "delay_s": 45,
+        "prompt": "",
+    },
     # platforms that have no channel to answer into (report stays session-only)
     "session_only_platforms": ["", "local", "cli", "cron", "api_server", "subagent"],
     # absolute path to the hermes CLI for detached runs; resolved when empty

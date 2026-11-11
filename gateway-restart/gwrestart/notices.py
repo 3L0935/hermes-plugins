@@ -54,11 +54,17 @@ def origin_from_env(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - origin lookup must never block a restart
             pass
     session_only = {str(p).lower() for p in (cfg.get("session_only_platforms") or [])}
+    profile = (os.environ.get("HERMES_PROFILE") or os.environ.get("HERMES_PROFILE_NAME") or "").strip()
+    if not profile:
+        home = str(config.hermes_home())
+        if "/profiles/" in home:
+            profile = home.rsplit("/profiles/", 1)[1].split("/")[0]
     return {
         "session_id": session_id,
         "platform": platform,
         "chat_id": chat_id,
         "thread_id": thread_id,
+        "profile": profile,
         "channel": platform not in session_only and bool(chat_id),
         "cwd": os.getcwd(),
     }
@@ -214,6 +220,15 @@ def render_report(report: dict[str, Any], *, for_channel: bool = False) -> str:
     started = [name for name, entry in companions.items() if entry.get("restarted")]
     if started:
         lines.append("units relancees: " + ", ".join(started))
+    poke = report.get("poke") or {}
+    if poke:
+        if poke.get("created"):
+            lines.append(
+                f"poke: tour de suivi autonome a {str(poke.get('at') or '')[11:19]}"
+                f" (job {poke.get('job_id') or '?'} -> {poke.get('deliver')})"
+            )
+        elif poke.get("why"):
+            lines.append(f"poke: pas declenche ({poke.get('why')})")
     steps = report.get("next_steps") or []
     if steps:
         lines.append("a faire: " + " | ".join(steps))

@@ -55,11 +55,21 @@ joined with `tasks`).
    dispatcher's first tick, and reclaimed by hand only if still dead after
    `manual_reclaim_after_s`.
 3. **report**: JSON in `<hermes_home>/gateway/restart/<id>/report.json` + `runner.log`.
-4. **re-poke**: a notice bound to the arming session (`session_id`, then platform+chat as a
-   fallback for a rotated session) is written to `<hermes_home>/gateway/restart/queue/`. The
-   plugin's `pre_llm_call` hook injects it into the **next turn of that session, exactly once**.
-   If the restart was armed from a messaging platform, the same summary is also posted into that
-   channel with `hermes send`.
+4. **re-poke**: two lanes, because a session notice alone is not a push.
+   - **poke (default, autonomous)**: a one-shot cron job fires `delay_s` after the gateway is
+     healthy and delivers its output as a **real inbound turn**, so the agent wakes up on its own
+     and works the report. Nobody has to be in front of the machine.
+     `poke.deliver: auto` (default) resolves to **the chat the tool call came from**:
+     a messaging origin (discord/telegram/...) is addressed directly (`platform:chat_id[:thread]`),
+     while a CLI/local origin falls back to `bot-chat` (the profile's canonical Bot Chat) because
+     `local` is not a valid cron delivery target — `deliver: local:<chat_id>` is rejected with
+     `[blocked_config] delivery platform 'local' is not a known cron delivery target`.
+     Set `poke.deliver` explicitly (e.g. `discord:#hermes`) to always poke the same place.
+   - **channel**: for a messaging origin (discord/telegram/...), the same summary is posted into
+     that channel with `hermes send`.
+   - **session notice**: a record bound to the arming session (`session_id`, then platform+chat as
+     a fallback) is injected into that session's next turn by the plugin's `pre_llm_call` hook,
+     exactly once. This is continuity for the conversation, not the wake-up.
 
 ## Config
 
@@ -83,6 +93,11 @@ plugins:
       keep_notices_days: 7
       companion_units: [hermes-hub, hermes-dashboard]
       notify_messaging_platforms: true
+      poke:
+        enabled: true               # autonomous follow-up turn after the restart
+        deliver: bot-chat           # bot-chat | bot-chat:<profile> | platform:chat
+        delay_s: 45
+        prompt: ""                  # empty = built-in prompt
       hermes_bin: ""                # resolved automatically when empty
 ```
 
