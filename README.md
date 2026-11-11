@@ -43,10 +43,40 @@ Reset times are fixed-clock (the API does not expose them): the session quota re
 
 ```bash
 git clone https://github.com/3L0935/hermes-plugins.git
-cp -r hermes-plugins/* ~/.hermes/plugins/
-hermes plugins enable <name>
-# restart gateway for slash commands
+cd hermes-plugins
+./install.sh                 # interactive: pick what to link into your Hermes home
 ```
+
+The installer **symlinks** each plugin into the Hermes home (no copy, so `git pull` updates the
+install), runs `hermes plugins enable`, and enables the toolset the plugin exposes. Nothing is
+hardcoded: a plugin is any directory with a `plugin.yaml`, and its toolset is discovered from
+`hermes tools list` after enabling.
+
+```bash
+./install.sh --list                    # plugins in the repo + link state
+./install.sh --status                  # link, enabled, toolsets, missing env vars
+./install.sh gateway-restart           # install by name
+./install.sh --all --yes               # everything, no prompt
+./install.sh --uninstall ollama-usage  # disable + remove the link
+./install.sh <plugin> --dry-run        # show the plan, change nothing
+./install.sh --profile work            # target ~/.hermes/profiles/work
+./install.sh --help                    # all options
+```
+
+Each plugin also ships its own `install.sh` that delegates to the root one
+(`./gateway-restart/install.sh` is `./install.sh gateway-restart`).
+
+Safety rules the installer follows:
+
+- a **real directory** at the target path is never silently replaced: it is moved to
+  `<name>.bak-<timestamp>` (or the plugin is skipped), because a stale copy would shadow the repo;
+- a symlink pointing somewhere else is reported and only replaced after confirmation;
+- `--uninstall` never deletes a real directory, only the symlink it created;
+- missing `requires_env` variables from the manifest are reported, not guessed.
+
+After installing, restart the gateway to load hooks, then open a **new session** for the
+plugin's tools to appear in the model's tool list (a running conversation keeps the tools it
+started with).
 
 ## License
 MIT
