@@ -1,0 +1,13 @@
+name: gateway-restart
+version: "1.0.0"
+description: >
+  Restart the Hermes gateway without killing the calling turn. Probes in-flight work
+  (kanban workers, cron runs, live gateway turns), judges per item whether it can be cut
+  or is worth waiting for, arms a detached systemd transient unit, then verifies health,
+  wakes interrupted subsystems and reports back into the session that asked.
+author: 3L0935
+kind: tool
+provides_tools:
+  - gateway_restart
+provides_hooks:
+  - pre_llm_call

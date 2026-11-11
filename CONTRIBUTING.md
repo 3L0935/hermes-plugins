@@ -13,6 +13,7 @@ PRs and issues are welcome. These plugins are built for real use — if somethin
 
 | Plugin | Status |
 |---|---|
+| `gateway-restart` | Stable |
 | `ollama-usage` | Stable |
 | `firecrawl-crawler` | Stable |
 | `deep-research` | ⚠️ WIP — rough edges, contributions especially welcome |

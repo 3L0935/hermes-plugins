@@ -4,6 +4,14 @@ A few plugins we built for [Hermes Agent](https://hermes-agent.nousresearch.com/
 
 ## Plugins
 
+### `gateway-restart`
+Restart the Hermes gateway from inside a session without losing the turn that asked for it.
+`gateway_restart(action="status")` probes what is running and judges per item whether it can be
+cut (young / silent / cheap cron run) or is worth waiting for; `action="arm"` hands the restart to
+a detached `systemd-run --user` transient unit (outside the gateway cgroup, so it survives), then
+verifies health, wakes what the restart interrupted, and injects the report into the arming
+session's next turn. Requires `systemd-run --user`; there is no fallback by design.
+
 ### `deep-research`
 Iterative multi-source research tool. Search-agnostic — works with SearXNG, Firecrawl, Tavily, Brave. Auto-discovers addons at runtime. Returns raw markdown, no LLM summarization truncation.
 
