@@ -182,8 +182,8 @@ def render_report(report: dict[str, Any], *, for_channel: bool = False) -> str:
     restart = report.get("restart") or {}
 
     head = (
-        f"[gateway-restart {rid}] Gateway redemarree a {str(restart.get('at') or '')[11:19]}"
-        f" en {_fmt_age(restart.get('downtime_s'))}"
+        f"[gateway-restart {rid}] Gateway saine a {str(restart.get('healthy_at') or restart.get('at') or '')[11:19]}"
+        f" (commande a {str(restart.get('at') or '')[11:19]}, {_fmt_age(restart.get('downtime_s'))} d'indispo)"
         if health.get("ok")
         else f"[gateway-restart {rid}] Restart PAS sain: {health.get('note') or 'inconnu'}"
     )

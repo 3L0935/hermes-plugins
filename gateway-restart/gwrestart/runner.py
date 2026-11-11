@@ -197,6 +197,7 @@ def main(argv: list[str]) -> int:
             "command_rc": done.returncode,
             "command_output": (done.stderr or done.stdout or "").strip()[:400],
             "at": _iso(t_restart),
+            "healthy_at": _iso() if health_res.get("ok") else None,
             "downtime_s": downtime,
         }
         report["health"] = health_res
