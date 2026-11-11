@@ -168,6 +168,16 @@ def prune(cfg: dict[str, Any] | None = None) -> None:
         pass
 
 
+def restarting_text(restart_id: str, cfg: dict[str, Any], at_local: str = "") -> str:
+    """One line the human can act on: the gateway is about to be down, do not type."""
+    window = int(cfg.get("expected_downtime_s") or 20)
+    when = f" at {at_local}" if at_local else " now"
+    return (
+        f"[gateway-restart {restart_id}] Gateway restarting{when} (~{window}s down). "
+        "Messages sent during the window are lost; I will report once it is healthy."
+    )
+
+
 def _fmt_age(seconds: Any) -> str:
     if seconds is None:
         return "?"

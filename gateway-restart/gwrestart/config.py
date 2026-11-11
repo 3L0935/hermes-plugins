@@ -49,13 +49,15 @@ DEFAULTS: dict[str, Any] = {
     "keep_notices_days": 7,
     # units that share the session with the gateway; restarted only if they died
     "companion_units": ["hermes-hub", "hermes-dashboard"],
+    # expected gateway boot time; only used for the human warning text
+    "expected_downtime_s": 20,
     # notify_messaging_platforms: post the summary into the messaging channel the restart came from
     "notify_messaging_platforms": True,
     # poke: run a follow-up agent turn on its own, without waiting for the human to type
     "poke": {
         "enabled": True,
-        "deliver": "bot-chat",   # cron target: bot-chat | bot-chat:<profile> | platform:chat
-        "delay_s": 45,
+        "deliver": "auto",   # auto = origin chat (platform:chat, else bot-chat)
+        "delay_s": 15,
         "prompt": "",
     },
     # platforms that have no channel to answer into (report stays session-only)

@@ -88,3 +88,13 @@ def test_explicit_target_still_wins():
     origin = {"platform": "discord", "chat_id": "123"}
     cfg = dict(CFG, poke={"deliver": "bot-chat"})
     assert poke.resolve_deliver(origin, cfg) == "bot-chat"
+
+
+def test_restarting_text_warns_the_human():
+    from gateway_restart.gwrestart import notices
+
+    text = notices.restarting_text("abc", {"expected_downtime_s": 20}, "21:49:36")
+    assert "restarting at 21:49:36" in text
+    assert "~20s down" in text
+    assert "lost" in text
+    assert notices.restarting_text("abc", {}).count("now") == 1

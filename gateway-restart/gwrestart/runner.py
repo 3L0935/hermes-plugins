@@ -176,6 +176,11 @@ def main(argv: list[str]) -> int:
         old_pid = (before_live.get("unit") or {}).get("main_pid") or 0
         unit = str(cfg.get("unit"))
         t_restart = time.time()
+        # Warn the human first, on the lanes that survive the restart (the runner is outside the
+        # gateway cgroup, so this send completes even though the gateway is about to die).
+        if spec.get("notify"):
+            warn_text = notices.restarting_text(restart_id, cfg)
+            report["restarting_notice"] = _send_channel(spec, warn_text, log)
         done = subprocess.run(
             ["systemctl", "--user", "restart", unit],
             capture_output=True,

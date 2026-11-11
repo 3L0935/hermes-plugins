@@ -30,7 +30,7 @@ POKE_DEFAULTS: dict[str, Any] = {
     # profile's canonical Bot Chat for a CLI/local origin. Override with an explicit cron target.
     "deliver": "auto",
     # seconds between "healthy" and the follow-up turn
-    "delay_s": 45,
+    "delay_s": 15,
     # empty = built-in prompt
     "prompt": "",
 }

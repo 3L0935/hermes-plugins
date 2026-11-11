@@ -99,6 +99,7 @@ def _handle(args: dict[str, Any], **kwargs: Any) -> str:
                 f"en vol: {len(will_wait)} a laisser finir, {len(will_cut)} jeune(s)/coupe(s). "
                 f"annuler: gateway_restart(action='cancel', restart_id='{spec['id']}')."
             )
+            user_notice = notices.restarting_text(spec["id"], cfg, at_local)
             warning = ""
             if origin.get("platform") == "cron":
                 warning = (
@@ -106,7 +107,8 @@ def _handle(args: dict[str, Any], **kwargs: Any) -> str:
                     "Prevoir un delay superieur au temps restant du job."
                 )
             return _payload(True, action, summary, restart_id=spec["id"], unit=info["unit"],
-                            spec=spec, timer=info["timer"], warning=warning)
+                            spec=spec, timer=info["timer"], warning=warning,
+                            user_notice=user_notice)
 
         if action == "cancel":
             restart_id = str(args.get("restart_id") or "").strip()
