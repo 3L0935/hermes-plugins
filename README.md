@@ -4,14 +4,6 @@ A few plugins we built for [Hermes Agent](https://hermes-agent.nousresearch.com/
 
 ## Plugins
 
-### `gateway-restart`
-Restart the Hermes gateway from inside a session without losing the turn that asked for it.
-`gateway_restart(action="status")` probes what is running and judges per item whether it can be
-cut (young / silent / cheap cron run) or is worth waiting for; `action="arm"` hands the restart to
-a detached `systemd-run --user` transient unit (outside the gateway cgroup, so it survives), then
-verifies health, wakes what the restart interrupted, and injects the report into the arming
-session's next turn. Requires `systemd-run --user`; there is no fallback by design.
-
 ### `deep-research`
 Iterative multi-source research tool. Search-agnostic — works with SearXNG, Firecrawl, Tavily, Brave. Auto-discovers addons at runtime. Returns raw markdown, no LLM summarization truncation.
 
@@ -55,7 +47,7 @@ hardcoded: a plugin is any directory with a `plugin.yaml`, and its toolset is di
 ```bash
 ./install.sh --list                    # plugins in the repo + link state
 ./install.sh --status                  # link, enabled, toolsets, missing env vars
-./install.sh gateway-restart           # install by name
+./install.sh ollama-usage            # install by name
 ./install.sh --all --yes               # everything, no prompt
 ./install.sh --uninstall ollama-usage  # disable + remove the link
 ./install.sh <plugin> --dry-run        # show the plan, change nothing
@@ -64,7 +56,7 @@ hardcoded: a plugin is any directory with a `plugin.yaml`, and its toolset is di
 ```
 
 Each plugin also ships its own `install.sh` that delegates to the root one
-(`./gateway-restart/install.sh` is `./install.sh gateway-restart`).
+(`./ollama-usage/install.sh` is `./install.sh ollama-usage`).
 
 Safety rules the installer follows:
 
