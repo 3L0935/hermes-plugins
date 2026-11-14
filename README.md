@@ -21,15 +21,17 @@ Extends Hermes' web capabilities with two tools backed by Firecrawl self-hosted:
 Requires a Firecrawl instance. Set `FIRECRAWL_API_URL` (defaults to `http://localhost:3002`).
 
 ### `ollama-usage`
-`/ollama` slash command that shows your Ollama Cloud usage — session and weekly quotas, per-model request counts, reset times. Zero LLM calls, instant response.
+`/ollama` slash command that shows your Ollama Cloud quota — 5h session and weekly remaining %, reset countdown, purchased balance. Zero LLM calls, instant response.
 
-Uses the official API endpoint `https://ollama.com/api/usage` (no scraping). Requires your Ollama API key:
+Uses the official balance endpoint `https://ollama.com/api/balance` (no scraping). Requires your Ollama API key:
 ```bash
 # Either export it, or add to ~/.hermes/.env
 export OLLAMA_API_KEY=your_key_here
 ```
 
-Reset times are fixed-clock (the API does not expose them): the session quota resets every 5 hours on the hour (a rolling cycle, e.g. 17:00 → 22:00 → 03:00 → 08:00 → 13:00 → 18:00 → ...), and the weekly quota resets Monday 02:00 local.
+`resets_at` comes from the API, so the countdown is real — no fixed-clock guesses. Both plan shapes are handled: a legacy plan returns `included.session` / `included.weekly` (remaining percentage per window), a credits plan returns `included.balance_usd` / `allowance_usd` / `period`, printed as a credit line.
+
+> `/api/usage` is **not** used any more: since Nov 2026 it only returns request counts and cost per bucket (`range=24h|7d|30d`, optional `group_by=model`), with no quota block. Reading `limits.session` from it is what made the command print "unavailable".
 
 ## Install
 

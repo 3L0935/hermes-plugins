@@ -1,4 +1,4 @@
 name: ollama-usage
-version: "1.0.0"
-description: "/ollama slash command — shows Ollama Cloud usage (session + weekly quotas, plan tier, reset times). Zero LLM calls, instant response."
+version: "1.1.0"
+description: "/ollama slash command — Ollama Cloud quota (5h session + weekly remaining %, reset times, purchased balance) from /api/balance. Zero LLM calls, instant response."
 author: 3L0935

@@ -2,29 +2,29 @@
 Ollama Usage Plugin for Hermes
 
 Provides:
-  - /ollama slash command: returns full Ollama Cloud usage (CLI + Discord)
+  - /ollama slash command: Ollama Cloud quota (5h session + weekly) and balance
 
 Uses register_command() — handled at the command-dispatch level,
 BEFORE any agent/LLM call. Zero LLM calls, instant response.
 
-Data source: official API endpoint https://ollama.com/api/usage
-  Auth: Authorization: Bearer <OLLAMA_API_KEY> (or raw key in header)
+Data source: official balance endpoint https://ollama.com/api/balance
+  Auth: Authorization: <key> (raw key works, same as the hermes-hub tracker)
   Key:  OLLAMA_API_KEY env var, or ~/.hermes/.env
 
-Response shape (as of Aug 2026):
+Response shape (Nov 2026, legacy plan with session/weekly windows):
   {
-    "activity": { "cost": "0.00000", "period": {...} },
-    "limits": {
-      "session": { "usage": 0.066, "models": [...] },   # fraction, 0.066 = 6.6%
-      "weekly":  { "usage": 0.404, "models": [...] }
-    }
+    "included": {
+      "session": {"remaining_percent": 97.45, "resets_at": "2026-11-14T16:00:00Z"},
+      "weekly":  {"remaining_percent": 60.63, "resets_at": "2026-11-16T00:00:00Z"}
+    },
+    "purchased": {"balance_usd": 0}
   }
 
-NOTE: the API does NOT expose reset timestamps. The windows are fixed-clock:
-  - Session: 5h cycle anchored at 17:00 local (resets 17h, 22h, 3h, 8h, 13h)
-  - Weekly:  Monday 02:00 local
-We compute the next reset from these fixed anchors. If Ollama ever exposes
-the real reset time, prefer it over this approximation.
+NOTE (14/11/2026): /api/usage no longer carries the quota block — it only
+returns request counts and cost per bucket, so the old parser read
+limits.session / limits.weekly as None and printed "unavailable". The quota
+lives on /api/balance, whose resets_at are real timestamps: no more guessing
+the fixed-clock anchors (17:00 local session, Monday 02:00 local weekly).
 """
 
 from __future__ import annotations
@@ -32,27 +32,22 @@ from __future__ import annotations
 import json
 import logging
 import os
+import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_DIR = Path(__file__).parent
 ENV_FILE = Path.home() / ".hermes" / ".env"
-USAGE_URL = "https://ollama.com/api/usage"
+BALANCE_URL = "https://ollama.com/api/balance"
 TIMEOUT = 15
 
-# Fixed-clock reset anchors (local time)
-SESSION_ANCHOR_HOUR = 17  # session resets every 5h, anchored at 17:00
-WEEKLY_RESET_HOUR = 2     # weekly resets Monday 02:00
+# (response key, display label)
+WINDOWS = (("session", "5h  "), ("weekly", "Week"))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
 
 def _load_api_key() -> str:
     """Resolve the Ollama API key: env var first, then ~/.hermes/.env."""
@@ -69,34 +64,52 @@ def _load_api_key() -> str:
     )
 
 
-def _format_reset(dt: datetime) -> str:
-    """Format a reset datetime as a human-readable 'in Xh Ym' string."""
-    delta = dt - _utc_now()
-    total_s = int(delta.total_seconds())
+def _format_reset(dt: datetime | None) -> str:
+    """Format a reset datetime as 'in Xh Ym (HH:MM TZ)' in local time."""
+    if dt is None:
+        return "reset unknown"
+    local = dt.astimezone()
+    total_s = int((dt - datetime.now(timezone.utc)).total_seconds())
     if total_s <= 0:
-        return f"now ({dt.astimezone().strftime('%H:%M %Z')})"
-    hours, rem = divmod(total_s, 3600)
-    minutes = rem // 60
-    if hours >= 24:
-        days, hours = divmod(hours, 24)
-        rel = f"in {days}d {hours}h"
-    elif hours > 0:
-        rel = f"in {hours}h {minutes}m"
+        rel = "now"
     else:
-        rel = f"in {minutes}m"
-    return f"{rel} ({dt.astimezone().strftime('%H:%M %Z')})"
+        days, rem = divmod(total_s, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes = rem // 60
+        if days:
+            rel = f"in {days}d {hours}h"
+        elif hours:
+            rel = f"in {hours}h {minutes}m"
+        else:
+            rel = f"in {minutes}m"
+    return f"{rel} ({local.strftime('%H:%M %Z')})"
+
+
+def _parse_reset(raw: object) -> datetime | None:
+    """Parse the API's ISO-8601 UTC timestamp into an aware datetime."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _bar(remaining_pct: float, width: int = 10) -> str:
+    filled = round(max(0.0, min(100.0, remaining_pct)) / 100 * width)
+    return "█" * filled + "░" * (width - filled)
 
 
 # ── API fetch ────────────────────────────────────────────────────────────
 
-def _fetch_usage_json() -> dict:
-    """Call the Ollama usage API and return the parsed JSON."""
-    key = _load_api_key()
+def _fetch_balance() -> dict:
+    """Call the Ollama balance API and return the parsed JSON."""
     req = urllib.request.Request(
-        USAGE_URL,
+        BALANCE_URL,
         headers={
-            "Authorization": key,
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0",
+            "Authorization": _load_api_key(),
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) hermes-ollama-usage",
             "Accept": "application/json",
         },
     )
@@ -104,110 +117,65 @@ def _fetch_usage_json() -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _next_session_reset(now: datetime) -> datetime:
-    """Next session reset: every 5h on the hour, anchored at 17:00.
-
-    Reset times are 17:00, 22:00, 03:00, 08:00, 13:00, 18:00, ... (5h steps).
-    Because 5 and 24 are coprime, the hour drifts each day — so walk forward
-    in 5h steps from a known anchor rather than assuming a fixed set of hours.
-    """
-    anchor = now.replace(hour=SESSION_ANCHOR_HOUR, minute=0, second=0, microsecond=0)
-    candidate = anchor
-    while candidate > now:
-        candidate -= timedelta(hours=5)
-    while candidate <= now:
-        candidate += timedelta(hours=5)
-    return candidate
-
-
-def _next_weekly_reset(now: datetime) -> datetime:
-    """Next weekly reset: Monday 02:00 local."""
-    # weekday(): Monday=0 ... Sunday=6
-    days_until_monday = (0 - now.weekday()) % 7
-    candidate = (now + timedelta(days=days_until_monday)).replace(
-        hour=WEEKLY_RESET_HOUR, minute=0, second=0, microsecond=0
+def _window_line(label: str, bucket: dict) -> str:
+    """One quota line: bar, remaining %, reset countdown."""
+    try:
+        remaining = float(bucket.get("remaining_percent"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return f"  {label}  unavailable"
+    remaining = max(0.0, min(100.0, remaining))
+    used = 100.0 - remaining
+    reset = _format_reset(_parse_reset(bucket.get("resets_at")))
+    return (
+        f"  {label}  [{_bar(remaining)}] {remaining:5.1f}% left"
+        f" ({used:.1f}% used) • resets {reset}"
     )
-    if candidate <= now:
-        candidate += timedelta(days=7)
-    return candidate
-
-
-def _parse_usage(data: dict) -> dict:
-    """Extract usage fields from the API JSON."""
-    # Reset anchors are in LOCAL time (17h session, Monday 02h weekly), so
-    # compute from the local clock, not UTC.
-    now = datetime.now().astimezone()
-    limits = data.get("limits", {})
-
-    session = limits.get("session", {})
-    weekly = limits.get("weekly", {})
-
-    return {
-        "session_used_pct": session.get("usage"),
-        "session_reset": _next_session_reset(now),
-        "session_models": session.get("models", []),
-        "weekly_used_pct": weekly.get("usage"),
-        "weekly_reset": _next_weekly_reset(now),
-        "weekly_models": weekly.get("models", []),
-    }
-
-
-def _format_models(models: list) -> list:
-    """Format per-model request counts as one line per model."""
-    if not models:
-        return []
-    lines = []
-    for m in models:
-        name = m.get("name", "?")
-        count = m.get("request_count", 0)
-        lines.append(f"    • {name} ×{count}")
-    return lines
 
 
 def _format_usage(data: dict) -> str:
-    """Format the usage data for display."""
-    lines = []
-    lines.append("📊 Ollama Cloud")
+    """Format the balance payload for display."""
+    included = data.get("included")
+    if not isinstance(included, dict):
+        return "Ollama Cloud usage: unavailable (unexpected /api/balance answer)"
 
-    session_pct = data.get("session_used_pct")
-    if session_pct is not None:
-        pct = float(session_pct) * 100
-        remaining = max(0, 100 - pct)
-        reset = data.get("session_reset")
-        line = f"  Session: {remaining:.0f}% remaining ({pct:.1f}% used)"
-        if reset:
-            line += f" • resets {_format_reset(reset)}"
+    lines = ["📊 Ollama Cloud"]
+    windows = [(k, l) for k, l in WINDOWS if isinstance(included.get(k), dict)]
+    if windows:
+        for key, label in windows:
+            lines.append(_window_line(label, included[key]))
+    elif isinstance(included.get("balance_usd"), (int, float)):
+        # Credits plan: included = {balance_usd, allowance_usd, period{from,until}}
+        left = float(included["balance_usd"])
+        allowance = included.get("allowance_usd")
+        pct = left / float(allowance) * 100 if isinstance(allowance, (int, float)) and allowance else None
+        line = f"  Credits  [{_bar(pct)}] ${left:.2f} left" if pct is not None else f"  Credits  ${left:.2f} left"
+        if isinstance(allowance, (int, float)) and allowance:
+            line += f" of ${allowance:.0f}"
+        period_until = (included.get("period") or {}).get("until")
+        if period_until:
+            line += f" • resets {_format_reset(_parse_reset(period_until))}"
         lines.append(line)
-        lines.extend(_format_models(data.get("session_models", [])))
     else:
-        lines.append("  Session: unavailable")
+        lines.append("  quota unavailable (unexpected /api/balance answer)")
 
-    weekly_pct = data.get("weekly_used_pct")
-    if weekly_pct is not None:
-        pct = float(weekly_pct) * 100
-        remaining = max(0, 100 - pct)
-        reset = data.get("weekly_reset")
-        line = f"  Weekly:  {remaining:.0f}% remaining ({pct:.1f}% used)"
-        if reset:
-            line += f" • resets {_format_reset(reset)}"
-        lines.append(line)
-        lines.extend(_format_models(data.get("weekly_models", [])))
-    else:
-        lines.append("  Weekly:  unavailable")
-
+    purchased = (data.get("purchased") or {}).get("balance_usd")
+    if isinstance(purchased, (int, float)) and purchased > 0:
+        lines.append(f"  Extra balance: ${purchased:.2f}")
     return "\n".join(lines)
 
 
 def _fetch_usage_text() -> str:
     """Fetch Ollama Cloud usage — returns formatted text or error message."""
     try:
-        data = _parse_usage(_fetch_usage_json())
-        return _format_usage(data)
+        return _format_usage(_fetch_balance())
     except FileNotFoundError as e:
         return f"Ollama Cloud usage: API key not configured.\n{e}"
-    except Exception as e:
-        logger.warning("Ollama usage fetch failed: %s", e)
-        return "Ollama Cloud usage: unavailable (API key invalid or endpoint changed)"
+    except urllib.error.HTTPError as e:
+        logger.warning("Ollama balance fetch failed: HTTP %s", e.code)
+        return f"Ollama Cloud usage: unavailable (HTTP {e.code} from /api/balance)"
+    except Exception as e:  # noqa: BLE001 — a slash command must never raise
+        logger.warning("Ollama balance fetch failed: %s", e)
+        return f"Ollama Cloud usage: unavailable ({type(e).__name__})"
 
 
 # ── plugin command ───────────────────────────────────────────────────────
@@ -225,6 +193,6 @@ def register(ctx):
     ctx.register_command(
         "ollama",
         _ollama_handler,
-        description="Show Ollama Cloud usage (session + weekly quotas)",
+        description="Show Ollama Cloud quota (5h session + weekly) and balance",
         args_hint="",
     )
